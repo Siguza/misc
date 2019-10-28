@@ -26,6 +26,7 @@ int main(int argc, const char **argv)
     int retval = -1,
         infd   = -1,
         outfd  = -1,
+        outc   = -1,
         oflags = O_WRONLY | O_TRUNC | O_CREAT | O_EXCL;
     void *file = MAP_FAILED,
          *mem  = NULL;
@@ -33,15 +34,24 @@ int main(int argc, const char **argv)
            mlen = 0;
 
     int aoff = 1;
-    if(aoff < argc && strcmp(argv[aoff], "-f") == 0)
+    for(int i=aoff; i < argc; i++)
     {
-        oflags &= ~O_EXCL;
-        ++aoff;
+        if(strcmp(argv[aoff], "-f") == 0)
+        {
+            oflags &= ~O_EXCL;
+            ++aoff;
+        }
+        else if(strcmp(argv[aoff], "-c") == 0)
+        {
+            outc = 1;
+            ++aoff;
+        }
     }
     if(argc - aoff != 2)
     {
         fprintf(stderr, "Usage: %s [-f] in out\n"
                         "    -f  Force (overwrite existing files)\n"
+                        "    -c  Output as c array\n"
                         , argv[0]);
         goto out;
     }
@@ -199,21 +209,61 @@ int main(int argc, const char **argv)
         size_t size = filesize < vmsize ? filesize : vmsize;
         memcpy((void*)((uintptr_t)mem + (vmaddr - lowest)), (void*)(ufile + fileoff), size);
     }
-    outfd = open(argv[aoff + 1], oflags, 0666);
-    if(outfd == -1)
+
+    if(strcmp(argv[aoff + 1], "-") == 0)
     {
-        LOG("open(%s): %s", argv[aoff + 1], strerror(errno));
-        goto out;
+        outfd = STDOUT_FILENO;
     }
-    for(size_t off = 0; off < mlen; )
+    else
     {
-        ssize_t w = write(outfd, (void*)((uintptr_t)mem + off), mlen - off);
-        if(w == -1)
+        outfd = open(argv[aoff + 1], oflags, 0666);
+        if(outfd == -1)
         {
-            LOG("write: %s", strerror(errno));
+            LOG("open(%s): %s", argv[aoff + 1], strerror(errno));
             goto out;
         }
-        off += w;
+    }
+
+    if(outc == -1)
+    {
+        for(size_t off = 0; off < mlen; )
+        {
+            ssize_t w = write(outfd, (void*)((uintptr_t)mem + off), mlen - off);
+            if(w == -1)
+            {
+                LOG("write: %s", strerror(errno));
+                goto out;
+            }
+            off += w;
+        }
+    }
+    else
+    {
+        for(uint8_t *ptr=(uint8_t *)mem; ptr != mem + mlen; ptr++)
+        {
+            int r = -1,
+                w = ptr - (uint8_t *)mem;
+
+            if (w % 12 == 0)
+            {
+                if (w != 0)
+                {
+                    r = dprintf(outfd, ",\n");
+                    if(r < 0) goto dprintf_error;
+                }
+
+                r = dprintf(outfd, "  ");
+                if(r < 0) goto dprintf_error;
+            }
+            else
+            {
+                r = dprintf(outfd, ", ");
+                if(r < 0) goto dprintf_error;
+            }
+
+            r = dprintf(outfd, "0x%02x", *ptr);
+            if(r < 0) goto dprintf_error;
+        }
     }
 
     LOG("Done, base address: 0x%llx", lowest);
@@ -225,4 +275,8 @@ out:;
     if(file != MAP_FAILED) munmap(file, flen);
     if(infd != -1) close(infd);
     return retval;
+
+dprintf_error:;
+    LOG("dprintf: %s", strerror(errno));
+    goto out;
 }
