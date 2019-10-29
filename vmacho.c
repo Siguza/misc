@@ -1,84 +1,196 @@
-// gcc -o vmacho vmacho.c -Wall -O3
+// cc -o vmacho vmacho.c -Wall -O3
+// cl vmacho.c /O2 /W3
+#define _CRT_SECURE_NO_WARNINGS
 #include <errno.h>
-#include <fcntl.h>              // open
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>              // fprintf, stderr
+#include <stdio.h>              // fopen, fclose, ftell, fseek, fflush, fprintf, stdin, stdout, stderr
 #include <stdlib.h>             // malloc, free
-#include <string.h>             // strerror
-#include <strings.h>            // bzero
-#include <unistd.h>             // write, close
-#include <sys/stat.h>           // fstat
-#include <sys/mman.h>           // mmap, munmap
-#include <mach/mach.h>
-#include <mach-o/loader.h>
+#include <string.h>             // memset, strcmp, strerror
 
-#define LOG(str, args...) do { fprintf(stderr, str "\n", ##args); } while(0)
+#define LOG(str, ...) do { fprintf(stderr, str "\n", ##__VA_ARGS__); } while(0)
 
-typedef struct mach_header        mach_hdr32_t;
-typedef struct mach_header_64     mach_hdr64_t;
-typedef struct load_command       mach_lc_t;
-typedef struct segment_command    mach_seg32_t;
-typedef struct segment_command_64 mach_seg64_t;
+#define MH_MAGIC        0xfeedface
+#define MH_MAGIC_64     0xfeedfacf
+#define LC_SEGMENT      0x1
+#define LC_SEGMENT_64   0x19
+#define VM_PROT_ALL     0x7
+
+typedef uint32_t vm_prot_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint32_t filetype;
+    uint32_t ncmds;
+    uint32_t sizeofcmds;
+    uint32_t flags;
+} mach_hdr32_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint32_t filetype;
+    uint32_t ncmds;
+    uint32_t sizeofcmds;
+    uint32_t flags;
+    uint32_t reserved;
+} mach_hdr64_t;
+
+typedef struct
+{
+    uint32_t cmd;
+    uint32_t cmdsize;
+} mach_lc_t;
+
+typedef struct
+{
+    uint32_t  cmd;
+    uint32_t  cmdsize;
+    char      segname[16];
+    uint32_t  vmaddr;
+    uint32_t  vmsize;
+    uint32_t  fileoff;
+    uint32_t  filesize;
+    vm_prot_t maxprot;
+    vm_prot_t initprot;
+    uint32_t  nsects;
+    uint32_t  flags;
+} mach_seg32_t;
+
+typedef struct
+{
+    uint32_t  cmd;
+    uint32_t  cmdsize;
+    char      segname[16];
+    uint64_t  vmaddr;
+    uint64_t  vmsize;
+    uint64_t  fileoff;
+    uint64_t  filesize;
+    vm_prot_t maxprot;
+    vm_prot_t initprot;
+    uint32_t  nsects;
+    uint32_t  flags;
+} mach_seg64_t;
+
+typedef enum
+{
+    Mode_Binary,
+    Mode_HeadlessArray,
+    Mode_NamedArray,
+} vmacho_mode_t;
 
 int main(int argc, const char **argv)
 {
-    int retval = -1,
-        infd   = -1,
-        outfd  = -1,
-        outc   = -1,
-        oflags = O_WRONLY | O_TRUNC | O_CREAT | O_EXCL;
-    void *file = MAP_FAILED,
+    int retval = -1;
+    void *file = NULL,
          *mem  = NULL;
     size_t flen = 0,
            mlen = 0;
+    FILE *infile  = NULL,
+         *outfile = NULL;
+    vmacho_mode_t mode = Mode_Binary;
+    const char *oflags = "wbx",
+               *aname  = NULL;
+    int r;
 
     int aoff = 1;
-    for(int i=aoff; i < argc; i++)
+    for(; aoff < argc; ++aoff)
     {
-        if(strcmp(argv[aoff], "-f") == 0)
+        if(argv[aoff][0] != '-' || argv[aoff][1] == '\0')
         {
-            oflags &= ~O_EXCL;
-            ++aoff;
+            break;
         }
-        else if(strcmp(argv[aoff], "-c") == 0)
+        int curoff = aoff;
+        for(size_t i = 1; argv[curoff][i] != '\0'; ++i)
         {
-            outc = 1;
-            ++aoff;
+            char c = argv[curoff][i];
+            switch(c)
+            {
+                case 'c':
+                    mode = Mode_HeadlessArray;
+                    break;
+                case 'C':
+                    if(argc - aoff < 4) // Don't want curoff here
+                    {
+                        LOG("-%c requires an argument", c);
+                        goto out;
+                    }
+                    mode = Mode_NamedArray;
+                    aname = argv[++aoff];
+                    break;
+                case 'f':
+                    oflags = "wb";
+                    break;
+                default:
+                    LOG("Bad option: -%c", c);
+                    goto out;
+            }
         }
     }
     if(argc - aoff != 2)
     {
-        fprintf(stderr, "Usage: %s [-f] in out\n"
-                        "    -f  Force (overwrite existing files)\n"
-                        "    -c  Output as c array\n"
+        fprintf(stderr, "Usage: %s [-cf] [-C name] in out\n"
+                        "    -c      Output as headless C array\n"
+                        "    -C name Output as named C array\n"
+                        "    -f      Force (overwrite existing files)\n"
                         , argv[0]);
         goto out;
     }
-    infd = open(argv[aoff], O_RDONLY);
-    if(infd == -1)
+
+    infile = strcmp(argv[aoff], "-") == 0 ? stdin : fopen(argv[aoff], "rb");
+    if(!infile)
     {
-        LOG("open(%s): %s", argv[aoff], strerror(errno));
+        LOG("fopen(%s): %s", argv[aoff], strerror(errno));
         goto out;
     }
-    struct stat s;
-    if(fstat(infd, &s) != 0)
+    long cur = ftell(infile);
+    if(cur < 0)
     {
-        LOG("fstat: %s", strerror(errno));
+        LOG("ftell(cur): %s", strerror(errno));
         goto out;
     }
-    flen = s.st_size;
+    r = fseek(infile, 0, SEEK_END);
+    if(r != 0)
+    {
+        LOG("fseek(end): %s", strerror(errno));
+        goto out;
+    }
+    long end = ftell(infile);
+    if(end < 0)
+    {
+        LOG("ftell(end): %s", strerror(errno));
+        goto out;
+    }
+    flen = (size_t)(end - cur);
+    r = fseek(infile, cur, SEEK_SET);
+    if(r != 0)
+    {
+        LOG("fseek(cur): %s", strerror(errno));
+        goto out;
+    }
+
     if(flen < sizeof(uint32_t))
     {
         LOG("File too short for magic.");
         goto out;
     }
-    file = mmap(NULL, flen, PROT_READ, MAP_FILE | MAP_PRIVATE, infd, 0);
-    if(file == MAP_FAILED)
+    file = malloc(flen);
+    if(!file)
     {
-        LOG("mmap: %s", strerror(errno));
+        LOG("malloc(file): %s", strerror(errno));
         goto out;
     }
+    if(fread(file, 1, flen, infile) != flen)
+    {
+        LOG("fread: %s", strerror(errno));
+        goto out;
+    }
+
     uintptr_t ufile = (uintptr_t)file;
     uint32_t magic = *(uint32_t*)file;
     mach_lc_t *lcs = NULL;
@@ -107,7 +219,7 @@ int main(int argc, const char **argv)
     }
     else
     {
-        LOG("Bad magic: %08x", magic);
+        LOG("Bad magic: %08llx", (unsigned long long)magic);
         goto out;
     }
 
@@ -117,7 +229,7 @@ int main(int argc, const char **argv)
     {
         if((uintptr_t)cmd + sizeof(*cmd) > (uintptr_t)end || (uintptr_t)cmd + cmd->cmdsize > (uintptr_t)end || (uintptr_t)cmd + cmd->cmdsize < (uintptr_t)cmd)
         {
-            LOG("Bad LC: 0x%lx", (uintptr_t)cmd - ufile);
+            LOG("Bad LC: 0x%llx", (unsigned long long)((uintptr_t)cmd - ufile));
             goto out;
         }
         uint64_t vmaddr   = 0,
@@ -150,17 +262,17 @@ int main(int argc, const char **argv)
         uint64_t off = fileoff + filesize;
         if(off > flen || off < fileoff)
         {
-            LOG("Bad segment: 0x%lx", (uintptr_t)cmd - ufile);
+            LOG("Bad segment: 0x%llx", (unsigned long long)((uintptr_t)cmd - ufile));
             goto out;
         }
         if((prot & VM_PROT_ALL) != 0)
         {
-            uintptr_t start = vmaddr;
+            uint64_t start = vmaddr;
             if(start < lowest)
             {
                 lowest = start;
             }
-            uintptr_t end = start + vmsize;
+            uint64_t end = start + vmsize;
             if(end > highest)
             {
                 highest = end;
@@ -169,17 +281,17 @@ int main(int argc, const char **argv)
     }
     if(highest < lowest)
     {
-        LOG("Bad memory layout, lowest: 0x%llx, highest: 0x%llx", lowest, highest);
+        LOG("Bad memory layout, lowest: 0x%llx, highest: 0x%llx", (unsigned long long)lowest, (unsigned long long)highest);
         goto out;
     }
-    mlen = highest - lowest;
+    mlen = (size_t)(highest - lowest);
     mem = malloc(mlen);
     if(!mem)
     {
         LOG("malloc: %s", strerror(errno));
         goto out;
     }
-    bzero(mem, mlen);
+    memset(mem, 0, mlen);
     for(mach_lc_t *cmd = lcs, *end = (mach_lc_t*)((uintptr_t)cmd + sizeofcmds); cmd < end; cmd = (mach_lc_t*)((uintptr_t)cmd + cmd->cmdsize))
     {
         uint64_t vmaddr   = 0,
@@ -206,77 +318,60 @@ int main(int argc, const char **argv)
         {
             continue;
         }
-        size_t size = filesize < vmsize ? filesize : vmsize;
+        size_t size = (size_t)(filesize < vmsize ? filesize : vmsize);
         memcpy((void*)((uintptr_t)mem + (vmaddr - lowest)), (void*)(ufile + fileoff), size);
     }
 
-    if(strcmp(argv[aoff + 1], "-") == 0)
+    outfile = strcmp(argv[aoff + 1], "-") == 0 ? stdout : fopen(argv[aoff + 1], oflags);
+    if(!outfile)
     {
-        outfd = STDOUT_FILENO;
+        LOG("fopen(%s): %s", argv[aoff + 1], strerror(errno));
+        goto out;
     }
-    else
+
+    if(mode == Mode_Binary)
     {
-        outfd = open(argv[aoff + 1], oflags, 0666);
-        if(outfd == -1)
+        if(fwrite(mem, 1, mlen, outfile) != mlen)
         {
-            LOG("open(%s): %s", argv[aoff + 1], strerror(errno));
+            LOG("fwrite: %s", strerror(errno));
             goto out;
         }
     }
-
-    if(outc == -1)
-    {
-        for(size_t off = 0; off < mlen; )
-        {
-            ssize_t w = write(outfd, (void*)((uintptr_t)mem + off), mlen - off);
-            if(w == -1)
-            {
-                LOG("write: %s", strerror(errno));
-                goto out;
-            }
-            off += w;
-        }
-    }
     else
     {
-        for(uint8_t *ptr=(uint8_t *)mem; ptr != mem + mlen; ptr++)
+        r = 0;
+        if(mode == Mode_NamedArray)
         {
-            int r = -1,
-                w = ptr - (uint8_t *)mem;
-
-            if (w % 12 == 0)
+            r = fprintf(outfile, "unsigned char %s[] = {\n", aname);
+        }
+        if(r >= 0)
+        {
+            uint8_t *u = mem;
+            for(size_t i = 0; i < mlen; ++i)
             {
-                if (w != 0)
-                {
-                    r = dprintf(outfd, ",\n");
-                    if(r < 0) goto dprintf_error;
-                }
-
-                r = dprintf(outfd, "  ");
-                if(r < 0) goto dprintf_error;
+                r = fprintf(outfile, "%s0x%02x,%c", i % 0x10 == 0 ? "    " : "", u[i], (i % 0x10 == 0xf || i == mlen - 1) ? '\n' : ' ');
+                if(r < 0) break;
             }
-            else
-            {
-                r = dprintf(outfd, ", ");
-                if(r < 0) goto dprintf_error;
-            }
-
-            r = dprintf(outfd, "0x%02x", *ptr);
-            if(r < 0) goto dprintf_error;
+        }
+        if(mode == Mode_NamedArray && r >= 0)
+        {
+            r = fprintf(outfile, "};\n");
+        }
+        if(r < 0)
+        {
+            LOG("fprintf: %s", strerror(errno));
+            goto out;
         }
     }
+    fflush(outfile); // In case of stdout
 
-    LOG("Done, base address: 0x%llx", lowest);
+    LOG("Done, base address: 0x%llx", (unsigned long long)lowest);
     retval = 0;
 
 out:;
-    if(outfd != -1) close(outfd);
+    if(outfile && outfile != stdout) fclose(outfile);
     if(mem) free(mem);
-    if(file != MAP_FAILED) munmap(file, flen);
-    if(infd != -1) close(infd);
+    if(file) free(file);
+    if(infile && infile != stdin) fclose(infile);
     return retval;
-
-dprintf_error:;
-    LOG("dprintf: %s", strerror(errno));
-    goto out;
 }
