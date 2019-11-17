@@ -10,11 +10,12 @@
 
 #define LOG(str, ...) do { fprintf(stderr, str "\n", ##__VA_ARGS__); } while(0)
 
-#define MH_MAGIC        0xfeedface
-#define MH_MAGIC_64     0xfeedfacf
-#define LC_SEGMENT      0x1
-#define LC_SEGMENT_64   0x19
-#define VM_PROT_ALL     0x7
+#define MH_MAGIC            0xfeedface
+#define MH_MAGIC_64         0xfeedfacf
+#define LC_SEGMENT          0x1
+#define LC_SEGMENT_64       0x19
+#define SEC_TYPE_MASK       0x000000ff
+#define SEC_TYPE_ZEROFILL   0x1
 
 typedef uint32_t vm_prot_t;
 
@@ -77,12 +78,156 @@ typedef struct
     uint32_t  flags;
 } mach_seg64_t;
 
+typedef struct
+{
+    char sectname[16];
+    char segname[16];
+    uint32_t addr;
+    uint32_t size;
+    uint32_t offset;
+    uint32_t align;
+    uint32_t reloff;
+    uint32_t nreloc;
+    uint32_t flags;
+    uint32_t reserved[2];
+} mach_sect32_t;
+
+typedef struct
+{
+    char sectname[16];
+    char segname[16];
+    uint64_t addr;
+    uint64_t size;
+    uint32_t offset;
+    uint32_t align;
+    uint32_t reloff;
+    uint32_t nreloc;
+    uint32_t flags;
+    uint32_t reserved[3];
+} mach_sect64_t;
+
 typedef enum
 {
     Mode_Binary,
     Mode_HeadlessArray,
     Mode_NamedArray,
 } vmacho_mode_t;
+
+// 0 = success
+// 1 = not a segment
+// N = fatal error
+static int get_mapped_segment_range(mach_lc_t *cmd, bool use_sections, uint64_t *addr, uint64_t *off, uint64_t *size)
+{
+    uint64_t lowest  = ~0,
+             highest =  0,
+             offset  =  0;
+    if(cmd->cmd == LC_SEGMENT)
+    {
+        mach_seg32_t *seg = (mach_seg32_t*)cmd;
+        uint32_t vmaddr   = seg->vmaddr,
+                 fileoff  = seg->fileoff,
+                 filesize = seg->filesize;
+        if(!use_sections)
+        {
+            lowest  = vmaddr;
+            highest = vmaddr + filesize;
+            offset = fileoff;
+        }
+        else
+        {
+            for(uint32_t i = 0, max = seg->nsects; i < max; ++i)
+            {
+                mach_sect32_t *sec = (mach_sect32_t*)(seg + 1) + i;
+                if((sec->flags & SEC_TYPE_MASK) == SEC_TYPE_ZEROFILL)
+                {
+                    continue;
+                }
+                uint32_t lo = sec->addr,
+                         hi = lo + sec->size;
+                if(hi < lo || lo < vmaddr || hi > vmaddr + filesize)
+                {
+                    return 2;
+                }
+                if(lo < lowest)
+                {
+                    lowest = lo;
+                }
+                if(hi > highest)
+                {
+                    highest = hi;
+                }
+            }
+            // Zero mapped sections
+            if(lowest > highest)
+            {
+                lowest  = vmaddr;
+                highest = vmaddr;
+                offset  = 0;
+            }
+            else
+            {
+                offset = fileoff + (lowest - vmaddr);
+            }
+        }
+    }
+    else if(cmd->cmd == LC_SEGMENT_64)
+    {
+        mach_seg64_t *seg = (mach_seg64_t*)cmd;
+        uint64_t vmaddr   = seg->vmaddr,
+                 fileoff  = seg->fileoff,
+                 filesize = seg->filesize;
+        if(!use_sections)
+        {
+            lowest  = vmaddr;
+            highest = vmaddr + filesize;
+            offset = fileoff;
+        }
+        else
+        {
+            for(uint32_t i = 0, max = seg->nsects; i < max; ++i)
+            {
+                mach_sect64_t *sec = (mach_sect64_t*)(seg + 1) + i;
+                if((sec->flags & SEC_TYPE_MASK) == SEC_TYPE_ZEROFILL)
+                {
+                    continue;
+                }
+                uint64_t lo = sec->addr,
+                         hi = lo + sec->size;
+                if(hi < lo || lo < vmaddr || hi > vmaddr + filesize)
+                {
+                    return 2;
+                }
+                if(lo < lowest)
+                {
+                    lowest = lo;
+                }
+                if(hi > highest)
+                {
+                    highest = hi;
+                }
+            }
+            // Zero mapped sections
+            if(lowest > highest)
+            {
+                lowest  = vmaddr;
+                highest = vmaddr;
+                offset  = 0;
+            }
+            else
+            {
+                offset = fileoff + (lowest - vmaddr);
+            }
+        }
+    }
+    else
+    {
+        return 1;
+    }
+    *addr = lowest;
+    *off  = offset;
+    *size = highest - lowest;
+    return 0;
+}
 
 int main(int argc, const char **argv)
 {
@@ -96,6 +241,7 @@ int main(int argc, const char **argv)
     vmacho_mode_t mode = Mode_Binary;
     const char *oflags = "wbx",
                *aname  = NULL;
+    bool use_sections  = true;
     int r;
 
     int aoff = 1;
@@ -126,6 +272,9 @@ int main(int argc, const char **argv)
                 case 'f':
                     oflags = "wb";
                     break;
+                case 's':
+                    use_sections = false;
+                    break;
                 default:
                     LOG("Bad option: -%c", c);
                     goto out;
@@ -138,6 +287,7 @@ int main(int argc, const char **argv)
                         "    -c      Output as headless C array\n"
                         "    -C name Output as named C array\n"
                         "    -f      Force (overwrite existing files)\n"
+                        "    -s      Use only segments for mapping, ignore sections\n"
                         , argv[0]);
         goto out;
     }
@@ -232,51 +382,41 @@ int main(int argc, const char **argv)
             LOG("Bad LC: 0x%llx", (unsigned long long)((uintptr_t)cmd - ufile));
             goto out;
         }
-        uint64_t vmaddr   = 0,
-                 vmsize   = 0,
-                 fileoff  = 0,
-                 filesize = 0;
-        vm_prot_t prot = 0;
-        if(cmd->cmd == LC_SEGMENT)
+
+        uint64_t vmaddr  = 0,
+                 fileoff = 0,
+                 size    = 0;
+        r = get_mapped_segment_range(cmd, use_sections, &vmaddr, &fileoff, &size);
+        switch(r)
         {
-            mach_seg32_t *seg = (mach_seg32_t*)cmd;
-            vmaddr   = seg->vmaddr;
-            vmsize   = seg->vmsize;
-            fileoff  = seg->fileoff;
-            filesize = seg->filesize;
-            prot = seg->maxprot;
+            case 0:
+                break;
+            case 1:
+                continue;
+            default:
+                LOG("get_mapped_segment_range returned error: %d", r);
+                goto out;
         }
-        else if(cmd->cmd == LC_SEGMENT_64)
-        {
-            mach_seg64_t *seg = (mach_seg64_t*)cmd;
-            vmaddr   = seg->vmaddr;
-            vmsize   = seg->vmsize;
-            fileoff  = seg->fileoff;
-            filesize = seg->filesize;
-            prot = seg->maxprot;
-        }
-        else
+        if(!size)
         {
             continue;
         }
-        uint64_t off = fileoff + filesize;
+        uint64_t off = fileoff + size;
         if(off > flen || off < fileoff)
         {
             LOG("Bad segment: 0x%llx", (unsigned long long)((uintptr_t)cmd - ufile));
             goto out;
         }
-        if((prot & VM_PROT_ALL) != 0)
+
+        uint64_t start = vmaddr;
+        if(start < lowest)
         {
-            uint64_t start = vmaddr;
-            if(start < lowest)
-            {
-                lowest = start;
-            }
-            uint64_t end = start + vmsize;
-            if(end > highest)
-            {
-                highest = end;
-            }
+            lowest = start;
+        }
+        uint64_t end = start + size;
+        if(end > highest)
+        {
+            highest = end;
         }
     }
     if(highest < lowest)
@@ -294,31 +434,24 @@ int main(int argc, const char **argv)
     memset(mem, 0, mlen);
     for(mach_lc_t *cmd = lcs, *end = (mach_lc_t*)((uintptr_t)cmd + sizeofcmds); cmd < end; cmd = (mach_lc_t*)((uintptr_t)cmd + cmd->cmdsize))
     {
-        uint64_t vmaddr   = 0,
-                 vmsize   = 0,
-                 fileoff  = 0,
-                 filesize = 0;
-        if(cmd->cmd == LC_SEGMENT)
+        uint64_t vmaddr  = 0,
+                 fileoff = 0,
+                 size    = 0;
+        r = get_mapped_segment_range(cmd, use_sections, &vmaddr, &fileoff, &size);
+        switch(r)
         {
-            mach_seg32_t *seg = (mach_seg32_t*)cmd;
-            vmaddr   = seg->vmaddr;
-            vmsize   = seg->vmsize;
-            fileoff  = seg->fileoff;
-            filesize = seg->filesize;
+            case 0:
+                break;
+            case 1:
+                continue;
+            default:
+                LOG("get_mapped_segment_range returned error: %d", r);
+                goto out;
         }
-        else if(cmd->cmd == LC_SEGMENT_64)
-        {
-            mach_seg64_t *seg = (mach_seg64_t*)cmd;
-            vmaddr   = seg->vmaddr;
-            vmsize   = seg->vmsize;
-            fileoff  = seg->fileoff;
-            filesize = seg->filesize;
-        }
-        else
+        if(!size)
         {
             continue;
         }
-        size_t size = (size_t)(filesize < vmsize ? filesize : vmsize);
         memcpy((void*)((uintptr_t)mem + (vmaddr - lowest)), (void*)(ufile + fileoff), size);
     }
 
