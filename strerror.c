@@ -1,5 +1,5 @@
-// gcc -o strerror strerror.c -Wall -O3
-// gcc -o strerror strerror.c -Wall -O3 -framework CoreFoundation -framework Security
+// cc -o strerror strerror.c -Wall -O3
+// cc -o strerror strerror.c -Wall -O3 -framework CoreFoundation -framework Security
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +30,7 @@ int main(int argc, const char **argv)
 #endif
     for(; off < argc; ++off)
     {
-        if(argv[off][0] != '-' || (argv[off][0] >= '0' && argv[off][0] <= '9')) break;
+        if(argv[off][0] != '-' || (argv[off][1] >= '0' && argv[off][1] <= '9')) break;
 #ifdef __APPLE__
         if(strcmp(argv[off], "-m") == 0) mode = kMach;
         else if(strcmp(argv[off], "-s") == 0) mode = kSec;
