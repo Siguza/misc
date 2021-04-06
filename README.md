@@ -8,6 +8,8 @@ Stuff too small for its own repo.
     Prints a 64bit command line arg in binary.
 -   `clz`  
     Clang's `__builtin_clz`, but for the command line.
+-   `dsc_syms`  
+    Prints symbol addresses of a dyld_shared_cache in radare2 format.
 -   `mesu`  
     Parses an Apple OTA update plist and prints it nicely.
 -   `rand`  
