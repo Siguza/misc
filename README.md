@@ -15,3 +15,5 @@ Stuff too small for its own repo.
     Simply calls `strerror` or `mach_error_string` with the given command line argument.
 -   `vmacho`  
     Extracts a Mach-O into a raw, headless binary.
+-   `xref`  
+    Parses an arm64 Mach-O and tries to find xrefs to a specified address.
