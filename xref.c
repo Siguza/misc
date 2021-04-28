@@ -187,7 +187,7 @@ int main(int argc, const char **argv)
                 goto out;
             }
             uint64_t addr = seg->vmaddr;
-            for(uint32_t *p = (uint32_t*)((uint8_t*)mem + seg->fileoff), *e = p + (seg->filesize / 4); p < e; ++p, addr += 4)
+            for(uint32_t *p = (uint32_t*)((uint8_t*)hdr + seg->fileoff), *e = p + (seg->filesize / 4); p < e; ++p, addr += 4)
             {
                 uint32_t v = *p;
                 if((v & 0x1f000000) == 0x10000000) // adr and adrp
