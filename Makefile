@@ -8,11 +8,10 @@ BINDIR ?= $(PREFIX)/bin
 SRC  := bindump.c clz.c dsc_syms.c rand.c vmacho.c xref.c
 BINS := bindump clz dsc_syms mesu strerror rand vmacho xref
 
-all: $(SRC:%.c=%)
+all: $(SRC:%.c=%) mesu strerror
 
 %: %.c
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
-	$(FAKEROOT) chmod +x $@
 
 mesu: mesu.c
 	$(CC) $(CFLAGS) $@.c -o $@ -framework CoreFoundation $(LDFLAGS)
@@ -22,6 +21,7 @@ strerror: strerror.c
 		-framework CoreFoundation -framework Security
 
 install: $(SRC:%.c=%) mesu strerror
+	$(FAKEROOT) chmod +x $^
 	mkdir -p $(DESTDIR)$(BINDIR)
 	cp -a $^ $(DESTDIR)$(BINDIR)
 
