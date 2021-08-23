@@ -1,5 +1,5 @@
 CC       ?= cc
-FAKEROOT ?= fakeroot
+INSTALL  ?= install
 CFLAGS   ?= -Wall -O3
 
 PREFIX ?= /usr/local
@@ -20,10 +20,8 @@ strerror: strerror.c
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS) \
 		-framework CoreFoundation -framework Security
 
-install: $(SRC:%.c=%) mesu strerror
-	$(FAKEROOT) chmod +x $^
-	mkdir -p $(DESTDIR)$(BINDIR)
-	cp -a $^ $(DESTDIR)$(BINDIR)
+install: all
+	$(INSTALL) -Dm755 $(BINS) $(DESTDIR)$(BINDIR)
 
 clean:
 	rm -r $(BINS)
@@ -31,4 +29,4 @@ clean:
 uninstall: clean
 	rm -rf $(addprefix $(DESTDIR)$(BINDIR)/, $(BINS))
 
-.PHONY: mesu strerror clean install
+.PHONY: all clean install
