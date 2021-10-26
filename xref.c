@@ -195,7 +195,7 @@ int main(int argc, const char **argv)
                     uint32_t reg = v & 0x1f;
                     bool is_adrp = (v & 0x80000000) != 0;
                     int64_t base = is_adrp ? (addr & 0xfffffffffffff000) : addr;
-                    int64_t off  = ((int64_t)((((v >> 5) & 0x7ffff) << 2) | ((v >> 29) & 0x3)) << 43) >> (is_adrp ? 31 : 43);
+                    int64_t off  = (int64_t)((uint64_t)((((v >> 5) & 0x7ffff) << 2) | ((v >> 29) & 0x3)) << 43) >> (is_adrp ? 31 : 43);
                     uint64_t target = base + off;
                     if(target == search)
                     {
@@ -285,7 +285,7 @@ int main(int argc, const char **argv)
                                         }
                                         else if((v & 0x00200000) == 0)
                                         {
-                                            int64_t soff = ((int64_t)((v >> 12) & 0x1ff) << 55) >> 55;
+                                            int64_t soff = (int64_t)((uint64_t)((v >> 12) & 0x1ff) << 55) >> 55;
                                             const char *sign = soff < 0 ? "-" : "";
                                             if(target + aoff + soff == search)
                                             {
@@ -366,7 +366,7 @@ int main(int argc, const char **argv)
                 }
                 else if((v & 0xbf000000) == 0x18000000 || (v & 0xff000000) == 0x98000000) // ldr and ldrsw literal
                 {
-                    int64_t off = ((int64_t)((v >> 5) & 0x7ffff) << 45) >> 43;
+                    int64_t off = (int64_t)((uint64_t)((v >> 5) & 0x7ffff) << 45) >> 43;
                     if(addr + off == search)
                     {
                         uint32_t reg  = v & 0x1f;
@@ -377,7 +377,7 @@ int main(int argc, const char **argv)
                 }
                 else if((v & 0x7c000000) == 0x14000000) // b and bl
                 {
-                    int64_t off = ((int64_t)(v & 0x3ffffff) << 38) >> 36;
+                    int64_t off = (int64_t)((uint64_t)(v & 0x3ffffff) << 38) >> 36;
                     if(addr + off == search)
                     {
                         bool is_bl = (v & 0x80000000) != 0;
@@ -386,7 +386,7 @@ int main(int argc, const char **argv)
                 }
                 else if((v & 0xff000010) == 0x54000000) // b.cond
                 {
-                    int64_t off = ((int64_t)((v >> 5) & 0x7ffff) << 45) >> 43;
+                    int64_t off = (int64_t)((uint64_t)((v >> 5) & 0x7ffff) << 45) >> 43;
                     if(addr + off == search)
                     {
                         const char *cond;
@@ -414,7 +414,7 @@ int main(int argc, const char **argv)
                 }
                 else if((v & 0x7e000000) == 0x34000000) // cbz and cbnz
                 {
-                    int64_t off = ((int64_t)((v >> 5) & 0x7ffff) << 45) >> 43;
+                    int64_t off = (int64_t)((uint64_t)((v >> 5) & 0x7ffff) << 45) >> 43;
                     if(addr + off == search)
                     {
                         uint32_t reg  = v & 0x1f;
@@ -425,7 +425,7 @@ int main(int argc, const char **argv)
                 }
                 else if((v & 0x7e000000) == 0x36000000) // tbz and tbnz
                 {
-                    int64_t off = ((int64_t)((v >> 5) & 0x3fff) << 50) >> 48;
+                    int64_t off = (int64_t)((uint64_t)((v >> 5) & 0x3fff) << 50) >> 48;
                     if(addr + off == search)
                     {
                         uint32_t reg  = v & 0x1f;
