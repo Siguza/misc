@@ -4,10 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <getopt.h>
 #ifdef __APPLE__
 #   include <mach/mach.h>
 #   include <CoreFoundation/CoreFoundation.h>
 #   include <Security/Security.h>
+char *xpc_strerror(int);
 #endif
 
 #ifdef __APPLE__
@@ -16,10 +18,11 @@ typedef enum
     kUnix,
     kMach,
     kSec,
+    kXpc,
 } what_t;
 #endif
 
-int main(int argc, const char **argv)
+int main(int argc, char **argv)
 {
     int off = 1;
 #ifdef __APPLE__
@@ -28,33 +31,69 @@ int main(int argc, const char **argv)
     buf[0] = '\0';
     what_t mode = kUnix;
 #endif
-    for(; off < argc; ++off)
-    {
-        if(argv[off][0] != '-' || (argv[off][1] >= '0' && argv[off][1] <= '9')) break;
+
+    int ch;
 #ifdef __APPLE__
-        if(strcmp(argv[off], "-m") == 0) mode = kMach;
-        else if(strcmp(argv[off], "-s") == 0) mode = kSec;
+    while ((ch = getopt(argc, argv, "msux")) != -1)
+#else
+    while ((ch = getopt(argc, argv, "u")) != -1)
 #endif
-        else
+    {
+        switch (ch)
         {
-            fprintf(stderr, "[!] Invalid argument: %s\n", argv[off]);
-            return 1;
+            case 'm':
+                mode = kMach;
+                break;
+            case 's':
+                mode = kSec;
+                break;
+            case 'x':
+                mode = kXpc;
+                break;
+            case 'u':
+                mode = kUnix;
+                break;
+            case '?':
+            default:
+                fprintf(stderr, "[!] Invalid argument: %s\n", argv[off]);
+                return EXIT_FAILURE;
+                break;
         }
     }
-    if(argc - off < 1)
-    {
-        fprintf(stderr, "Usage:\n"
-                        "    %s [-m|-s] number\n"
-                        , argv[0]);
-        return 1;
+    argc -= optind;
+    argv += optind;
+
+    if (argc == 0) {
+        fprintf(stderr, "usage: strerror [-msux] [errno]\n");
+        return EXIT_FAILURE;
     }
-    int i = (int)strtoul(argv[off], NULL, 0);
-    const char *s =
+
+    int i = (int)strtoul(argv[0], NULL, 0);
+
+    char *s = NULL;
+    switch (mode)
+    {
 #ifdef __APPLE__
-    mode == kSec ? ((str = SecCopyErrorMessageString(i, NULL)), !str ? "(null)" : (CFStringGetCString(str, buf, sizeof(buf), kCFStringEncodingUTF8), buf)) :
-    mode == kMach ? mach_error_string(i) :
+        case kSec:
+            str = SecCopyErrorMessageString(i, NULL);
+            if (str) {
+                CFStringGetCString(str, buf, sizeof(buf), kCFStringEncodingUTF8);
+                s = buf;
+            } else
+                s = "(null)";
+            break;
+        case kXpc:
+            s = xpc_strerror(i);
+            break;
+        case kMach:
+            s = mach_error_string(i);
+            break;
 #endif
-    strerror(i);
+        case kUnix:
+        default:
+            s = strerror(i);
+            break;
+    }
     printf("%s\n", s);
     return 0;
 }
