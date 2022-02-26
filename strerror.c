@@ -12,34 +12,31 @@
 char *xpc_strerror(int);
 #endif
 
-#ifdef __APPLE__
 typedef enum
 {
     kUnix,
+#ifdef __APPLE__
     kMach,
     kSec,
     kXpc,
-} what_t;
 #endif
+} what_t;
 
 int main(int argc, char **argv)
 {
-    int off = 1;
 #ifdef __APPLE__
     CFStringRef str = NULL;
     char buf[512];
     buf[0] = '\0';
-    what_t mode = kUnix;
 #endif
 
-    int ch;
+    what_t mode = kUnix;
+
 #ifdef __APPLE__
-    while ((ch = getopt(argc, argv, "msux")) != -1)
-#else
-    while ((ch = getopt(argc, argv, "u")) != -1)
-#endif
+    int ch;
+    while((ch = getopt(argc, argv, "msux")) != -1)
     {
-        switch (ch)
+        switch(ch)
         {
             case 'm':
                 mode = kMach;
@@ -55,32 +52,41 @@ int main(int argc, char **argv)
                 break;
             case '?':
             default:
-                fprintf(stderr, "[!] Invalid argument: %s\n", argv[off]);
+                fprintf(stderr, "[!] Invalid argument: -%c\n", ch);
                 return EXIT_FAILURE;
-                break;
         }
     }
+#endif
     argc -= optind;
     argv += optind;
 
-    if (argc == 0) {
-        fprintf(stderr, "usage: strerror [-msux] [errno]\n");
+    if(argc == 0)
+    {
+#ifdef __APPLE__
+        fprintf(stderr, "Usage: strerror [-msux] <errno>\n");
+#else
+        fprintf(stderr, "Usage: strerror <errno>\n");
+#endif
         return EXIT_FAILURE;
     }
 
     int i = (int)strtoul(argv[0], NULL, 0);
 
     char *s = NULL;
-    switch (mode)
+    switch(mode)
     {
 #ifdef __APPLE__
         case kSec:
             str = SecCopyErrorMessageString(i, NULL);
-            if (str) {
+            if(str)
+            {
                 CFStringGetCString(str, buf, sizeof(buf), kCFStringEncodingUTF8);
                 s = buf;
-            } else
+            }
+            else
+            {
                 s = "(null)";
+            }
             break;
         case kXpc:
             s = xpc_strerror(i);
