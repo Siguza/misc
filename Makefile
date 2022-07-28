@@ -9,7 +9,7 @@ BINS := $(SRC:%.c=%)
 
 # mesu and strerror need some extra CFLAGS
 mesu_CFLAGS     := -framework CoreFoundation
-strerror_CFLAGS := -framework CoreFoundation -framework Security
+strerror_CFLAGS := $(mesu_CFLAGS) -framework Security
 
 all: $(BINS)
 
