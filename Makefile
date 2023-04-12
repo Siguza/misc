@@ -17,7 +17,8 @@ all: $(BINS)
 	$(CC) $(CFLAGS) $< -o $@ $($@_CFLAGS) $(LDFLAGS)
 
 install: all
-	$(INSTALL) -Dm755 $(BINS) -t $(DESTDIR)$(BINDIR)
+	$(INSTALL) -d $(DESTDIR)$(BINDIR)
+	$(INSTALL) -m755 $(BINS) $(DESTDIR)$(BINDIR)
 
 clean:
 	rm -r $(BINS)
