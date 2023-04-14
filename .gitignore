@@ -1,9 +1,9 @@
 .DS_Store
-bindump
-clz
-dsc_syms
-mesu
-rand
-strerror
-vmacho
-xref
+/bindump
+/clz
+/dsc_syms
+/mesu
+/rand
+/strerror
+/vmacho
+/xref
